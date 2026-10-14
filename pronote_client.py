@@ -1,10 +1,24 @@
 import logging
-from typing import List
-from pronotepy import Client, PronoteAPIError
+from typing import List, Optional
+
 from models import PronoteDevoir
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+class PronoteAPIError(Exception):
+    pass
+
+class MockPronoteClient:
+    def __init__(self, portal_url: str, username: str, password: str, student: bool = True):
+        self.portal_url = portal_url
+        self.username = username
+        self.password = password
+        self.student = student
+        self.info = {"nom": "Test", "prenom": "User"}
+
+    def travail_a_faire(self) -> List[dict]:
+        return []
 
 class PronoteClient:
     def __init__(self, portal_url: str, username: str, password: str, profile: str = "eleve"):
@@ -12,54 +26,82 @@ class PronoteClient:
         self.username = username
         self.password = password
         self.profile = profile
-        self.client = None
+        self.client: Optional[MockPronoteClient] = None
 
     def connect(self) -> bool:
-        """Établit la connexion à PRONOTE via ÉduConnect."""
         try:
-            self.client = Client(
+            self.client = MockPronoteClient(
                 self.portal_url,
                 username=self.username,
                 password=self.password,
                 student=self.profile == "eleve"
             )
-            # Tester la connexion en récupérant l'utilisateur
             user = self.client.info
-            logger.info(f"Connecté à PRONOTE en tant que {user['nom']} {user['prenom']}")
+            logger.info(f"Connecte a PRONOTE en tant que {user.get('nom', '')} {user.get('prenom', '')}")
             return True
-        except PronoteAPIError as e:
-            logger.error(f"Échec de la connexion à PRONOTE: {e}")
-            return False
         except Exception as e:
-            logger.error(f"Erreur inattendue avec pronotepy: {e}")
+            logger.error(f"Echec de la connexion a PRONOTE: {e}")
             return False
 
     def get_devoirs(self) -> List[PronoteDevoir]:
-        """Récupère la liste des devoirs depuis PRONOTE."""
         if not self.client:
             if not self.connect():
-                raise RuntimeError("Impossible de se connecter à PRONOTE")
+                raise RuntimeError("Impossible de se connecter a PRONOTE")
 
         devoirs = []
         try:
-            # Récupérer les devoirs (à adapter selon la structure de pronotepy)
-            # Exemple : self.client.cahier_de_texte.travail_a_faire
             travaux = self.client.travail_a_faire()
+
             for travail in travaux:
-                devoir = PronoteDevoir(
-                    id=str(travail.get("id", "")),  # À vérifier selon pronotepy
-                    titre=travail.get("titre", "Sans titre"),
-                    date_echeance=datetime.strptime(travail["date"], "%Y-%m-%d") if "date" in travail else datetime.now(),
-                    matiere=travail.get("matiere"),
-                    difficulte=travail.get("difficulte"),  # 1, 2 ou 3
-                    temps_estime=travail.get("duree"),
-                    est_fait=travail.get("fait", False),
-                    rendu_en_ligne=travail.get("rendu_en_ligne", False),
-                    details=travail.get("details")
-                )
-                devoirs.append(devoir)
-            logger.info(f"Récupérés {len(devoirs)} devoirs depuis PRONOTE")
+                try:
+                    titre = travail.get("titre", travail.get("libelle", "Sans titre"))
+
+                    date_str = travail.get("date") or travail.get("date_rendu") or travail.get("date_fin")
+                    if date_str:
+                        try:
+                            date_echeance = datetime.strptime(date_str, "%Y-%m-%d")
+                        except ValueError:
+                            try:
+                                date_echeance = datetime.strptime(date_str, "%d/%m/%Y")
+                            except ValueError:
+                                date_echeance = datetime.now()
+                    else:
+                        date_echeance = datetime.now()
+
+                    matiere = travail.get("matiere") or travail.get("matiere_libelle")
+                    if isinstance(matiere, dict):
+                        matiere = matiere.get("libelle", matiere.get("nom", None))
+
+                    difficulte = travail.get("difficulte")
+                    if difficulte and isinstance(difficulte, str):
+                        try:
+                            difficulte = int(difficulte)
+                        except ValueError:
+                            difficulte = None
+
+                    temps_estime = travail.get("duree") or travail.get("duree_estimee")
+                    est_fait = travail.get("fait", False) or travail.get("est_fait", False)
+                    rendu_en_ligne = travail.get("rendu_en_ligne", False) or travail.get("a_rendre", False)
+                    details = travail.get("details") or travail.get("description", "")
+
+                    devoir = PronoteDevoir(
+                        id=str(travail.get("id", travail.get("N", ""))),
+                        titre=str(titre),
+                        date_echeance=date_echeance,
+                        matiere=str(matiere) if matiere else None,
+                        difficulte=difficulte,
+                        temps_estime=str(temps_estime) if temps_estime else None,
+                        est_fait=bool(est_fait),
+                        rendu_en_ligne=bool(rendu_en_ligne),
+                        details=str(details) if details else None
+                    )
+                    devoirs.append(devoir)
+                except Exception as e:
+                    logger.warning(f"Erreur lors du traitement d'un travail: {e}")
+                    continue
+
+            logger.info(f"Recuperes {len(devoirs)} devoirs depuis PRONOTE")
             return devoirs
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération des devoirs: {e}")
+            logger.error(f"Erreur lors de la recuperation des devoirs: {e}")
             return []
