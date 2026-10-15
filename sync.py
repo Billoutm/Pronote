@@ -1,39 +1,55 @@
+#!/usr/bin/env python3
+"""Moteur de synchronisation PRONOTE -> Notion."""
+
 import sqlite3
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict
 from models import PronoteDevoir, NotionTask, SyncState
-from pronote_client import PronoteClient
-from notion_client import NotionClient
+from Selenium_version import SeleniumPronoteClient
+from my_notion_client import NotionClient
 from config import Config
 import time
 
 logger = logging.getLogger(__name__)
 
 class SyncEngine:
+    """Moteur de synchronisation entre PRONOTE et Notion."""
+
     def __init__(self, config: Config):
         self.config = config
-        self.pronote_client = PronoteClient(
+        self.pronote_client = SeleniumPronoteClient(
             portal_url=config.PRONOTE_PORTAL_URL,
             username=config.PRONOTE_EDUCONNECT_USERNAME,
             password=config.PRONOTE_EDUCONNECT_PASSWORD,
-            profile=config.PRONOTE_STUDENT_PROFILE
+            profile=config.PRONOTE_STUDENT_PROFILE,
+            etablissement=config.PRONOTE_ETABLISSEMENT,
+            headless=config.HEADLESS
         )
         self.notion_client = NotionClient(config)
         self._init_db()
 
         self.matiere_to_type = {
-            "Mathematiques": "Apprentissage", "Maths": "Apprentissage",
-            "Physique-Chimie": "Recherche", "Physique": "Recherche", "Chimie": "Recherche",
+            "Mathematiques": "Apprentissage",
+            "Maths": "Apprentissage",
+            "Physique-Chimie": "Recherche",
+            "Physique": "Recherche",
+            "Chimie": "Recherche",
             "SVT": "Recherche",
             "Francais": "Apprentissage",
-            "Histoire-Geographie": "Apprentissage", "Histoire": "Apprentissage", "Geographie": "Apprentissage",
-            "Informatique": "Code", "NSI": "Code",
+            "Histoire-Geographie": "Apprentissage",
+            "Histoire": "Apprentissage",
+            "Geographie": "Apprentissage",
+            "Informatique": "Code",
+            "NSI": "Code",
             "EPS": "Entrainement",
-            "Arts Plastiques": "Creation", "Arts": "Creation",
+            "Arts Plastiques": "Creation",
+            "Arts": "Creation",
             "Musique": "Creation",
             "Technologie": "Design",
-            "Anglais": "Apprentissage", "Espagnol": "Apprentissage", "Allemand": "Apprentissage",
+            "Anglais": "Apprentissage",
+            "Espagnol": "Apprentissage",
+            "Allemand": "Apprentissage",
         }
 
         self.difficulte_to_priority = {
@@ -43,6 +59,7 @@ class SyncEngine:
         }
 
     def _init_db(self):
+        """Initialise la base SQLite pour le suivi de synchronisation."""
         self.conn = sqlite3.connect("pronote_sync.db")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.cursor = self.conn.cursor()
@@ -67,11 +84,13 @@ class SyncEngine:
         self.conn.commit()
 
     def _generate_pronote_id(self, devoir: PronoteDevoir) -> str:
+        """Genere une cle unique pour un devoir si ID PRONOTE non disponible."""
         matiere = devoir.matiere or "unknown"
         date_str = devoir.date_echeance.strftime('%Y-%m-%d')
         return f"{devoir.titre}|{date_str}|{matiere}"
 
     def _map_devoir_to_task(self, devoir: PronoteDevoir) -> NotionTask:
+        """Convertit un PronoteDevoir en NotionTask."""
         matiere = devoir.matiere or ""
         task_type = self.matiere_to_type.get(matiere)
         priority = self.difficulte_to_priority.get(devoir.difficulte, "Moyenne")
@@ -79,7 +98,7 @@ class SyncEngine:
 
         note_parts = []
         if devoir.temps_estime:
-            note_parts.append(f"⏱ Temps : {devoir.temps_estime}")
+            note_parts.append(f"Temps: {devoir.temps_estime}")
         if devoir.rendu_en_ligne:
             note_parts.append("#rendu_en_ligne:oui")
         if devoir.details:
@@ -102,6 +121,7 @@ class SyncEngine:
         )
 
     def _get_sync_state(self, pronote_id: str) -> Optional[SyncState]:
+        """Recupere l etat de synchronisation pour un devoir."""
         self.cursor.execute(
             "SELECT * FROM sync_state WHERE pronote_id = ?",
             (pronote_id,)
@@ -119,6 +139,7 @@ class SyncEngine:
         return None
 
     def _update_sync_state(self, state: SyncState):
+        """Met a jour l etat de synchronisation."""
         self.cursor.execute("""
             INSERT OR REPLACE INTO sync_state
             (pronote_id, notion_page_id, title, due_date, last_updated, status)
@@ -134,6 +155,7 @@ class SyncEngine:
         self.conn.commit()
 
     def _archive_old_tasks(self, current_pronote_ids: List[str]):
+        """Archive les taches qui n existent plus dans PRONOTE."""
         current_ids = set(current_pronote_ids)
         self.cursor.execute("SELECT pronote_id, notion_page_id FROM sync_state WHERE status = 'active'")
         existing_states = self.cursor.fetchall()
@@ -141,7 +163,7 @@ class SyncEngine:
         for pronote_id, notion_page_id in existing_states:
             if pronote_id not in current_ids and notion_page_id:
                 try:
-                    self.notion_client.client.pages().update(
+                    self.notion_client.client.pages.update(
                         page_id=notion_page_id,
                         properties={"Statut": {"select": {"name": "Archive"}}}
                     )
@@ -151,10 +173,11 @@ class SyncEngine:
                     )
                     logger.info(f"Tache archivee: {pronote_id}")
                 except Exception as e:
-                    logger.error(f"Erreur lors de l'archivage de {pronote_id}: {e}")
+                    logger.error(f"Erreur lors de l archivage de {pronote_id}: {e}")
         self.conn.commit()
 
     def _create_or_update_task(self, devoir: PronoteDevoir) -> bool:
+        """Cree ou met a jour une tache dans Notion."""
         pronote_id = devoir.id or self._generate_pronote_id(devoir)
         task = self._map_devoir_to_task(devoir)
         sync_state = self._get_sync_state(pronote_id)
@@ -204,6 +227,7 @@ class SyncEngine:
         return False
 
     def sync(self):
+        """Execute la synchronisation complete."""
         logger.info("Debut de la synchronisation PRONOTE -> Notion")
 
         try:
@@ -237,5 +261,7 @@ class SyncEngine:
         logger.info(f"Synchronisation terminee: {success_count}/{len(devoirs)} devoirs traites")
 
     def close(self):
+        """Fermeture propre des connexions."""
         if hasattr(self, 'conn'):
             self.conn.close()
+        self.pronote_client.close()

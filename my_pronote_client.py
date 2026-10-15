@@ -1,24 +1,10 @@
 import logging
 from typing import List, Optional
-
+from pronotepy import Client, PronoteAPIError
 from models import PronoteDevoir
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
-class PronoteAPIError(Exception):
-    pass
-
-class MockPronoteClient:
-    def __init__(self, portal_url: str, username: str, password: str, student: bool = True):
-        self.portal_url = portal_url
-        self.username = username
-        self.password = password
-        self.student = student
-        self.info = {"nom": "Test", "prenom": "User"}
-
-    def travail_a_faire(self) -> List[dict]:
-        return []
 
 class PronoteClient:
     def __init__(self, portal_url: str, username: str, password: str, profile: str = "eleve"):
@@ -26,27 +12,32 @@ class PronoteClient:
         self.username = username
         self.password = password
         self.profile = profile
-        self.client: Optional[MockPronoteClient] = None
+        self.client: Optional[Client] = None
 
     def connect(self) -> bool:
+        """Établit la connexion à PRONOTE."""
         try:
-            self.client = MockPronoteClient(
+            # Version basique sans paramètre ENT
+            self.client = Client(
                 self.portal_url,
                 username=self.username,
-                password=self.password,
-                student=self.profile == "eleve"
+                password=self.password
             )
             user = self.client.info
-            logger.info(f"Connecte a PRONOTE en tant que {user.get('nom', '')} {user.get('prenom', '')}")
+            logger.info(f"Connecté à PRONOTE en tant que {user.get('nom', '')} {user.get('prenom', '')}")
             return True
+        except PronoteAPIError as e:
+            logger.error(f"Échec de la connexion à PRONOTE: {e}")
+            return False
         except Exception as e:
-            logger.error(f"Echec de la connexion a PRONOTE: {e}")
+            logger.error(f"Erreur inattendue avec pronotepy: {e}")
             return False
 
     def get_devoirs(self) -> List[PronoteDevoir]:
+        """Récupère la liste des devoirs depuis PRONOTE."""
         if not self.client:
             if not self.connect():
-                raise RuntimeError("Impossible de se connecter a PRONOTE")
+                raise RuntimeError("Impossible de se connecter à PRONOTE")
 
         devoirs = []
         try:
@@ -100,8 +91,8 @@ class PronoteClient:
                     logger.warning(f"Erreur lors du traitement d'un travail: {e}")
                     continue
 
-            logger.info(f"Recuperes {len(devoirs)} devoirs depuis PRONOTE")
+            logger.info(f"Récupérés {len(devoirs)} devoirs depuis PRONOTE")
             return devoirs
         except Exception as e:
-            logger.error(f"Erreur lors de la recuperation des devoirs: {e}")
+            logger.error(f"Erreur lors de la récupération des devoirs: {e}")
             return []

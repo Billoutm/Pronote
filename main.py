@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
+"""Point d entree principal pour la synchronisation PRONOTE -> Notion."""
+
 import logging
 import argparse
 import sys
+from typing import Optional
+
 from config import get_config
 from sync import SyncEngine
 
 def setup_logging(log_level: str = "INFO") -> None:
+    """Configure le systeme de logging."""
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -15,7 +20,8 @@ def setup_logging(log_level: str = "INFO") -> None:
         ]
     )
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
+    """Parse les arguments de la ligne de commande."""
     parser = argparse.ArgumentParser(
         description="Synchronise les devoirs de PRONOTE vers Notion"
     )
@@ -30,10 +36,23 @@ def parse_args():
         default="INFO",
         help="Niveau de logging"
     )
+    parser.add_argument(
+        "--headless",
+        action="store_false",
+        help="Desactive le mode headless (affiche la fenetre Chrome)"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=".env",
+        help="Chemin vers le fichier .env"
+    )
     return parser.parse_args()
 
 def main():
+    """Fonction principale."""
     args = parse_args()
+
     setup_logging(args.log_level)
     logger = logging.getLogger(__name__)
 
@@ -44,6 +63,10 @@ def main():
             config.DRY_RUN = True
             logger.info("Mode DRY-RUN active")
 
+        if not args.headless:
+            config.HEADLESS = False
+            logger.info("Mode visible (fenetre Chrome affichee)")
+
         sync_engine = SyncEngine(config)
 
         try:
@@ -53,9 +76,10 @@ def main():
 
         logger.info("Synchronisation terminee avec succes")
         return 0
+
     except ValueError as e:
         logger.error(f"Erreur de configuration: {e}")
-        logger.error("Veuillez verifier que toutes les variables d'environnement sont definies dans .env")
+        logger.error("Veuillez verifier que toutes les variables d environnement sont definies dans .env")
         return 1
     except Exception as e:
         logger.error(f"Erreur inattendue: {e}", exc_info=True)
