@@ -4,6 +4,7 @@ from typing import Optional, List
 
 @dataclass
 class PronoteDevoir:
+    """Represente un devoir recupere depuis PRONOTE."""
     id: str
     titre: str
     date_echeance: datetime
@@ -16,6 +17,7 @@ class PronoteDevoir:
 
 @dataclass
 class NotionTask:
+    """Represente une tache dans Notion."""
     title: str
     due_date: str
     page_id: Optional[str] = None
@@ -28,9 +30,10 @@ class NotionTask:
 
 @dataclass
 class SyncState:
+    """Etat de synchronisation stocke en SQLite."""
     pronote_id: str
-    notion_page_id: Optional[str]
-    title: str
-    due_date: str
+    notion_page_id: Optional[str] = None
+    title: str = ""
+    due_date: str = ""
     last_updated: datetime = field(default_factory=datetime.now)
     status: str = "active"
