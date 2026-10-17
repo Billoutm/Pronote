@@ -14,6 +14,7 @@ class PronoteDevoir:
     est_fait: bool = False
     rendu_en_ligne: bool = False
     details: Optional[str] = None
+    date_donne: Optional[str] = None
 
 @dataclass
 class NotionTask:
