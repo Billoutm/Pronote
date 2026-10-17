@@ -30,26 +30,26 @@ class SyncEngine:
         self._init_db()
 
         self.matiere_to_type = {
-            "Mathematiques": "Apprentissage",
-            "Maths": "Apprentissage",
-            "Physique-Chimie": "Recherche",
-            "Physique": "Recherche",
-            "Chimie": "Recherche",
-            "SVT": "Recherche",
-            "Francais": "Apprentissage",
-            "Histoire-Geographie": "Apprentissage",
-            "Histoire": "Apprentissage",
-            "Geographie": "Apprentissage",
-            "Informatique": "Code",
-            "NSI": "Code",
-            "EPS": "Entrainement",
-            "Arts Plastiques": "Creation",
-            "Arts": "Creation",
-            "Musique": "Creation",
-            "Technologie": "Design",
-            "Anglais": "Apprentissage",
-            "Espagnol": "Apprentissage",
-            "Allemand": "Apprentissage",
+            "Mathematiques": "Devoirs",
+            "Maths": "Devoirs",
+            "Physique-Chimie": "Devoirs",
+            "Physique": "Devoirs",
+            "Chimie": "Devoirs",
+            "SVT": "Devoirs",
+            "Francais": "Devoirs",
+            "Histoire-Geographie": "Devoirs",
+            "Histoire": "Devoirs",
+            "Geographie": "Devoirs",
+            "Informatique": "Devoirs",
+            "NSI": "Devoirs",
+            "EPS": "Devoirs",
+            "Arts Plastiques": "Devoirs",
+            "Arts": "Devoirs",
+            "Musique": "Devoirs",
+            "Technologie": "Devoirs",
+            "Anglais": "Devoirs",
+            "Espagnol": "Devoirs",
+            "Allemand": "Devoirs",
         }
 
         self.difficulte_to_priority = {
@@ -97,6 +97,8 @@ class SyncEngine:
         status = "Termine" if devoir.est_fait else "Pas commence"
 
         note_parts = []
+        if devoir.date_donne:
+            note_parts.append(f"Date de don: {devoir.date_donne}")
         if devoir.temps_estime:
             note_parts.append(f"Temps: {devoir.temps_estime}")
         if devoir.rendu_en_ligne:
@@ -108,9 +110,10 @@ class SyncEngine:
         note_parts.append(f"#pronote-id:{pronote_id}")
 
         due_date_str = devoir.date_echeance.strftime("%d/%m/%Y")
+        title = f"[{devoir.matiere}] {devoir.titre}" if devoir.matiere else devoir.titre
 
         return NotionTask(
-            title=devoir.titre,
+            title=title,
             due_date=due_date_str,
             type=task_type,
             priority=priority,
