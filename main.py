@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
         help="Mode simulation (aucune modification dans Notion)"
     )
     parser.add_argument(
+        "--no-ai",
+        action="store_true",
+        help="Desactive l'utilisation de l'IA Mistral"
+    )
+    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         default="INFO",
@@ -57,11 +62,15 @@ def main():
     logger = logging.getLogger(__name__)
 
     try:
-        config = get_config()
+        config = get_config(args.config)
 
         if args.dry_run:
             config.DRY_RUN = True
             logger.info("Mode DRY-RUN active")
+
+        if args.no_ai:
+            config.AI_ENABLED = False
+            logger.info("IA desactivee par argument CLI")
 
         if not args.headless:
             config.HEADLESS = False
@@ -70,11 +79,15 @@ def main():
         sync_engine = SyncEngine(config)
 
         try:
-            sync_engine.sync()
+            stats = sync_engine.sync()
         finally:
             sync_engine.close()
 
-        logger.info("Synchronisation terminee avec succes")
+        if stats.get("errors", 0) > 0:
+            logger.warning(f"Synchronisation terminee avec des erreurs: {stats}")
+            return 1
+
+        logger.info(f"Synchronisation terminee avec succes: {stats}")
         return 0
 
     except ValueError as e:

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Moteur de synchronisation PRONOTE -> Notion."""
+"""Moteur de synchronisation PRONOTE -> Notion avec enrichissement IA (Mistral)."""
 
 import sqlite3
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from models import PronoteDevoir, NotionTask, SyncState
 from Selenium_version import SeleniumPronoteClient
 from my_notion_client import NotionClient
+from ai_client import MistralAIClient
+from ai_enrich import enrich_devoir
 from config import Config
 import time
 
@@ -27,29 +29,32 @@ class SyncEngine:
             headless=config.HEADLESS
         )
         self.notion_client = NotionClient(config)
+        self.ai_client = MistralAIClient(config)
         self._init_db()
 
+        # Options valides de type dans Notion Tâches:
+        # Apprentissage, Code, Création, Design, Developpement, Entraînement, Marketing, Match, Montage, Prospection, Recherche, Tournage
         self.matiere_to_type = {
-            "Mathematiques": "Devoirs",
-            "Maths": "Devoirs",
-            "Physique-Chimie": "Devoirs",
-            "Physique": "Devoirs",
-            "Chimie": "Devoirs",
-            "SVT": "Devoirs",
-            "Francais": "Devoirs",
-            "Histoire-Geographie": "Devoirs",
-            "Histoire": "Devoirs",
-            "Geographie": "Devoirs",
-            "Informatique": "Devoirs",
-            "NSI": "Devoirs",
-            "EPS": "Devoirs",
-            "Arts Plastiques": "Devoirs",
-            "Arts": "Devoirs",
-            "Musique": "Devoirs",
-            "Technologie": "Devoirs",
-            "Anglais": "Devoirs",
-            "Espagnol": "Devoirs",
-            "Allemand": "Devoirs",
+            "Mathematiques": "Entraînement",
+            "Maths": "Entraînement",
+            "Physique-Chimie": "Apprentissage",
+            "Physique": "Apprentissage",
+            "Chimie": "Apprentissage",
+            "SVT": "Apprentissage",
+            "Francais": "Recherche",
+            "Histoire-Geographie": "Recherche",
+            "Histoire": "Recherche",
+            "Geographie": "Recherche",
+            "Informatique": "Code",
+            "NSI": "Code",
+            "EPS": "Entraînement",
+            "Arts Plastiques": "Création",
+            "Arts": "Création",
+            "Musique": "Création",
+            "Technologie": "Design",
+            "Anglais": "Apprentissage",
+            "Espagnol": "Apprentissage",
+            "Allemand": "Apprentissage",
         }
 
         self.difficulte_to_priority = {
@@ -90,18 +95,26 @@ class SyncEngine:
         return f"{devoir.titre}|{date_str}|{matiere}"
 
     def _map_devoir_to_task(self, devoir: PronoteDevoir) -> NotionTask:
-        """Convertit un PronoteDevoir en NotionTask."""
+        """Convertit un PronoteDevoir en NotionTask avec enrichissement IA."""
         matiere = devoir.matiere or ""
-        task_type = self.matiere_to_type.get(matiere)
-        priority = self.difficulte_to_priority.get(devoir.difficulte, "Moyenne")
-        status = "Termine" if devoir.est_fait else "Pas commence"
+        
+        # Enrichissement IA (F1)
+        enriched = enrich_devoir(self.ai_client, devoir)
+        
+        task_type = enriched.get("type_notion") or self.matiere_to_type.get(matiere)
+        difficulte = enriched.get("difficulte", devoir.difficulte or 2)
+        priority = self.difficulte_to_priority.get(difficulte, "Moyenne")
+        status = "Terminé" if devoir.est_fait else "Pas commencé"
+        titre_court = enriched.get("titre_court") or devoir.titre
 
         note_parts = []
+        if enriched.get("temps_estime_min"):
+            note_parts.append(f"Temps estimé : ~{enriched['temps_estime_min']} min")
+        if enriched.get("categorie"):
+            note_parts.append(f"Catégorie : {enriched['categorie']}")
         if devoir.date_donne:
-            note_parts.append(f"Date de don: {devoir.date_donne}")
-        if devoir.temps_estime:
-            note_parts.append(f"Temps: {devoir.temps_estime}")
-        if devoir.rendu_en_ligne:
+            note_parts.append(f"Date de don : {devoir.date_donne}")
+        if devoir.rendu_en_ligne or enriched.get("a_rendre_en_ligne"):
             note_parts.append("#rendu_en_ligne:oui")
         if devoir.details:
             note_parts.append(devoir.details)
@@ -110,7 +123,7 @@ class SyncEngine:
         note_parts.append(f"#pronote-id:{pronote_id}")
 
         due_date_str = devoir.date_echeance.strftime("%d/%m/%Y")
-        title = f"[{devoir.matiere}] {devoir.titre}" if devoir.matiere else devoir.titre
+        title = f"[{devoir.matiere}] {titre_court}" if devoir.matiere else titre_court
 
         return NotionTask(
             title=title,
@@ -157,63 +170,47 @@ class SyncEngine:
         ))
         self.conn.commit()
 
-    def _archive_old_tasks(self, current_pronote_ids: List[str]):
-        """Archive les taches qui n existent plus dans PRONOTE."""
-        current_ids = set(current_pronote_ids)
-        self.cursor.execute("SELECT pronote_id, notion_page_id FROM sync_state WHERE status = 'active'")
-        existing_states = self.cursor.fetchall()
-
-        for pronote_id, notion_page_id in existing_states:
-            if pronote_id not in current_ids and notion_page_id:
-                try:
-                    self.notion_client.client.pages.update(
-                        page_id=notion_page_id,
-                        properties={"Statut": {"select": {"name": "Archive"}}}
-                    )
-                    self.cursor.execute(
-                        "UPDATE sync_state SET status = 'archived' WHERE pronote_id = ?",
-                        (pronote_id,)
-                    )
-                    logger.info(f"Tache archivee: {pronote_id}")
-                except Exception as e:
-                    logger.error(f"Erreur lors de l archivage de {pronote_id}: {e}")
-        self.conn.commit()
-
-    def _create_or_update_task(self, devoir: PronoteDevoir) -> bool:
-        """Cree ou met a jour une tache dans Notion."""
+    def _create_or_update_task(self, devoir: PronoteDevoir) -> str:
+        """Cree ou met a jour une tache dans Notion. Retourne 'created', 'updated', 'dry_run' ou 'error'."""
         pronote_id = devoir.id or self._generate_pronote_id(devoir)
         task = self._map_devoir_to_task(devoir)
         sync_state = self._get_sync_state(pronote_id)
 
-        if sync_state:
+        # Chercher par pronote_id si SQLite ne l'a pas mais Notion l'a
+        if not sync_state:
+            existing_notion_task = self.notion_client.search_task_by_pronote_id(pronote_id)
+            if existing_notion_task:
+                page_id = existing_notion_task["id"]
+                sync_state = SyncState(
+                    pronote_id=pronote_id,
+                    notion_page_id=page_id,
+                    title=task.title,
+                    due_date=devoir.date_echeance.strftime("%Y-%m-%d"),
+                    status="active"
+                )
+                self._update_sync_state(sync_state)
+
+        if sync_state and sync_state.notion_page_id:
             task.page_id = sync_state.notion_page_id
             if self.config.DRY_RUN:
                 logger.info(f"[DRY-RUN] Mise a jour de la tache: {task.title}")
-                return True
+                return "dry_run"
 
-            if sync_state.notion_page_id:
-                existing_task = self.notion_client.get_task_by_title(task.title, task.due_date)
-                if not existing_task:
-                    logger.warning(f"Tache {task.title} introuvable dans Notion, recreation...")
-                    sync_state = None
-                else:
-                    success = self.notion_client.update_task(task)
-                    if success:
-                        self._update_sync_state(SyncState(
-                            pronote_id=pronote_id,
-                            notion_page_id=task.page_id,
-                            title=task.title,
-                            due_date=devoir.date_echeance.strftime("%Y-%m-%d"),
-                            status="active"
-                        ))
-                    return success
-            else:
-                sync_state = None
-
-        if not sync_state:
+            success = self.notion_client.update_task(task)
+            if success:
+                self._update_sync_state(SyncState(
+                    pronote_id=pronote_id,
+                    notion_page_id=task.page_id,
+                    title=task.title,
+                    due_date=devoir.date_echeance.strftime("%Y-%m-%d"),
+                    status="active"
+                ))
+                return "updated"
+            return "error"
+        else:
             if self.config.DRY_RUN:
                 logger.info(f"[DRY-RUN] Creation de la tache: {task.title}")
-                return True
+                return "dry_run"
 
             notion_page_id = self.notion_client.create_task(task)
             if notion_page_id:
@@ -224,47 +221,51 @@ class SyncEngine:
                     due_date=devoir.date_echeance.strftime("%Y-%m-%d"),
                     status="active"
                 ))
-                return True
-            return False
+                return "created"
+            return "error"
 
-        return False
-
-    def sync(self):
-        """Execute la synchronisation complete."""
+    def sync(self) -> Dict[str, int]:
+        """Execute la synchronisation complete et retourne les statistiques."""
         logger.info("Debut de la synchronisation PRONOTE -> Notion")
+        stats = {"created": 0, "updated": 0, "dry_run": 0, "errors": 0, "total": 0}
 
         try:
             devoirs = self.pronote_client.get_devoirs()
         except Exception as e:
             logger.error(f"Erreur lors de la recuperation des devoirs: {e}")
-            return
+            stats["errors"] += 1
+            return stats
 
         if not devoirs:
             logger.warning("Aucun devoir recupere depuis PRONOTE")
-            return
+            return stats
 
-        logger.info(f"Trouves {len(devoirs)} devoirs a synchroniser")
-
-        success_count = 0
-        current_pronote_ids = []
+        stats["total"] = len(devoirs)
+        logger.info(f"Trouves {stats['total']} devoirs a synchroniser")
 
         for devoir in devoirs:
-            pronote_id = devoir.id or self._generate_pronote_id(devoir)
-            current_pronote_ids.append(pronote_id)
-
-            if self._create_or_update_task(devoir):
-                success_count += 1
+            result = self._create_or_update_task(devoir)
+            if result in stats:
+                stats[result] += 1
+            else:
+                stats["errors"] += 1
 
             if self.config.NOTION_RATE_LIMIT_DELAY > 0:
                 time.sleep(self.config.NOTION_RATE_LIMIT_DELAY)
 
-        if not self.config.DRY_RUN:
-            self._archive_old_tasks(current_pronote_ids)
-
-        logger.info(f"Synchronisation terminee: {success_count}/{len(devoirs)} devoirs traites")
+        logger.info(f"Synchronisation terminee: {stats}")
+        return stats
 
     def close(self):
         """Fermeture propre des connexions."""
         if hasattr(self, 'conn'):
             self.conn.close()
-        self.pronote_client.close()
+        if hasattr(self, 'ai_client'):
+            try:
+                self.ai_client.close()
+            except Exception:
+                pass
+        try:
+            self.pronote_client.close()
+        except Exception:
+            pass

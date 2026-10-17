@@ -17,6 +17,7 @@ class NotionClient:
         self.config = config
         self.client = NotionClientLibrary(auth=config.NOTION_API_KEY)
         self.tasks_db_id = config.NOTION_TASK_DATABASE_ID
+        self.tasks_data_source_id = getattr(config, "NOTION_TASKS_DATA_SOURCE_ID", "2b3443d6-1d67-81c5-809c-000b67ecd179")
         self.lycee_project_id = config.NOTION_LYCEE_PROJECT_PAGE_ID
 
     def _format_date_for_notion(self, date_str: str) -> Optional[str]:
@@ -36,16 +37,16 @@ class NotionClient:
             due_date_iso = self._format_date_for_notion(task.due_date)
 
             properties = {
-                "Nom": {"title": [{"text": {"content": task.title}}]},
-                "Date debut & fin": {"date": {"end": due_date_iso}} if due_date_iso else None,
+                "Nom": {"title": [{"text": {"content": task.title[:2000]}}]},
+                "Date début & fin": {"date": {"start": due_date_iso}} if due_date_iso else None,
                 "Type": {"multi_select": [{"name": task.type}] if task.type else []},
-                "Priorite": {"select": {"name": task.priority}},
-                "Statut": {"select": {"name": task.status}},
-                "Note": {"rich_text": [{"text": {"content": task.note}}]},
+                "Priorité": {"select": {"name": task.priority}},
+                "Statut": {"status": {"name": task.status}},
+                "Note": {"rich_text": [{"text": {"content": task.note[:2000]}}]},
             }
 
             if self.lycee_project_id:
-                properties["Projet lie"] = {"relation": [{"id": self.lycee_project_id}]}
+                properties["Projet lié"] = {"relation": [{"id": self.lycee_project_id}]}
 
             properties = {k: v for k, v in properties.items() if v is not None}
 
@@ -53,8 +54,9 @@ class NotionClient:
                 parent={"database_id": self.tasks_db_id},
                 properties=properties,
             )
-            logger.info(f"Tache creee dans Notion: {task.title} (ID: {response['id']})")
-            return response["id"]
+            page_id = response.get("id")
+            logger.info(f"Tache creee dans Notion: {task.title} (ID: {page_id})")
+            return page_id
         except Exception as e:
             logger.error(f"Echec de la creation de la tache {task.title}: {e}")
             return None
@@ -69,12 +71,12 @@ class NotionClient:
             due_date_iso = self._format_date_for_notion(task.due_date)
 
             properties = {
-                "Nom": {"title": [{"text": {"content": task.title}}]},
-                "Date debut & fin": {"date": {"end": due_date_iso}} if due_date_iso else None,
+                "Nom": {"title": [{"text": {"content": task.title[:2000]}}]},
+                "Date début & fin": {"date": {"start": due_date_iso}} if due_date_iso else None,
                 "Type": {"multi_select": [{"name": task.type}] if task.type else []},
-                "Priorite": {"select": {"name": task.priority}},
-                "Statut": {"select": {"name": task.status}},
-                "Note": {"rich_text": [{"text": {"content": task.note}}]},
+                "Priorité": {"select": {"name": task.priority}},
+                "Statut": {"status": {"name": task.status}},
+                "Note": {"rich_text": [{"text": {"content": task.note[:2000]}}]},
             }
 
             properties = {k: v for k, v in properties.items() if v is not None}
@@ -93,17 +95,18 @@ class NotionClient:
         """Recherche une tache par son titre et sa date d'echeance."""
         try:
             due_date_iso = self._format_date_for_notion(due_date)
-            response = self.client.databases.query(
-                database_id=self.tasks_db_id,
+            response = self.client.data_sources.query(
+                data_source_id=self.tasks_data_source_id,
                 filter={
                     "and": [
                         {"property": "Nom", "title": {"equals": title}},
-                        {"property": "Date debut & fin", "date": {"equals": due_date_iso}}
+                        {"property": "Date début & fin", "date": {"equals": due_date_iso}}
                     ]
                 }
             )
-            if response["results"]:
-                return response["results"][0]
+            results = response.get("results", [])
+            if results:
+                return results[0]
             return None
         except Exception as e:
             logger.error(f"Echec de la recherche de la tache {title}: {e}")
@@ -112,8 +115,8 @@ class NotionClient:
     def search_task_by_pronote_id(self, pronote_id: str) -> Optional[Dict[str, Any]]:
         """Recherche une tache par son ID PRONOTE (dans la propriete Note)."""
         try:
-            response = self.client.databases.query(
-                database_id=self.tasks_db_id,
+            response = self.client.data_sources.query(
+                data_source_id=self.tasks_data_source_id,
                 filter={
                     "property": "Note",
                     "rich_text": {
@@ -121,8 +124,9 @@ class NotionClient:
                     }
                 }
             )
-            if response["results"]:
-                return response["results"][0]
+            results = response.get("results", [])
+            if results:
+                return results[0]
             return None
         except Exception as e:
             logger.error(f"Echec de la recherche par pronote_id {pronote_id}: {e}")
@@ -131,8 +135,8 @@ class NotionClient:
     def get_all_tasks(self) -> List[Dict[str, Any]]:
         """Recupere toutes les taches de la base Notion."""
         try:
-            response = self.client.databases.query(
-                database_id=self.tasks_db_id,
+            response = self.client.data_sources.query(
+                data_source_id=self.tasks_data_source_id,
                 page_size=100
             )
             return response.get("results", [])
